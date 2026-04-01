@@ -99,4 +99,4 @@ app.get('/', (req, res) => {
     res.json({ status: 'ZEN|EDGE Bot ishlayapti', vaqt: toshkentVaqt() });
 });
 
-app.listen(PORT, () => console.log(`ZEN|EDGE Bot — Port: ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`ZEN|EDGE Bot — Port: ${PORT}`));
