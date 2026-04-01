@@ -4,7 +4,7 @@ const axios = require('axios');
 
 const BOT_TOKEN  = process.env.BOT_TOKEN  || '8773209170:AAF1J0xOv96zENQ09tAzIG056_7DS8AeRks';
 const CHANNEL_ID = process.env.CHANNEL_ID || '@Zenedge_trade';
-const PORT       = process.env.PORT       || 8080;
+const PORT = process.env.PORT || 3000;;
 const TWELVE_KEY = process.env.TWELVE_KEY || '1c93dd7752f841eaab0f40642e5c5346';
 
 const bot = new TelegramBot(BOT_TOKEN);
