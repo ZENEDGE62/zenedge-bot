@@ -1,233 +1,149 @@
-require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const cron = require('node-cron');
+const express = require('express');
+const axios = require('axios');
 
-const TOKEN   = process.env.BOT_TOKEN;
-const CHANNEL = process.env.CHANNEL_ID || '@Zenedge_trade';
+const BOT_TOKEN  = process.env.BOT_TOKEN  || '8773209170:AAF1J0xOv96zENQ09tAzIG056_7DS8AeRks';
+const CHANNEL_ID = process.env.CHANNEL_ID || '@Zenedge_trade';
+const PORT       = process.env.PORT       || 3000;
+const TWELVE_KEY = process.env.TWELVE_KEY || '1c93dd7752f841eaab0f40642e5c5346';
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const app = express();
+app.use(express.json());
 
-console.log('ZEN|EDGE Bot ishga tushdi!');
-console.log('Kanal:', CHANNEL);
-
-// ── NARX OLISH ────────────────────────────────────────────
-let lastPrice = 4527.78;
-
-async function getPrice() {
-  try {
-    const axios = require('axios');
-    const r = await axios.get('https://api.metals.live/v1/spot/gold', { timeout: 5000 });
-    const p = r.data?.[0]?.price;
-    if (p && p > 3000) { lastPrice = parseFloat(p.toFixed(2)); return lastPrice; }
-  } catch {}
-  // Simulatsiya
-  lastPrice = parseFloat((lastPrice + (Math.random() - 0.52) * 0.5).toFixed(2));
-  return lastPrice;
+function toshkentVaqt() {
+    const now = new Date();
+    const tk  = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 5 * 3600000);
+    const h   = String(tk.getHours()).padStart(2, '0');
+    const m   = String(tk.getMinutes()).padStart(2, '0');
+    const d   = String(tk.getDate()).padStart(2, '0');
+    const mo  = String(tk.getMonth() + 1).padStart(2, '0');
+    return `${d}.${mo} ${h}:${m} (Toshkent)`;
 }
 
-// ── SIGNAL HISOBLASH ──────────────────────────────────────
-function calcSignal(price, prevPrice) {
-  const diff = price - prevPrice;
-  const rsi  = 35 + Math.random() * 30; // 35-65 orasida
-  const macd = diff > 0 ? Math.abs(diff) * 0.4 : -Math.abs(diff) * 0.4;
-
-  let type, conf;
-  if (rsi < 38 && diff < 0) { type = 'SELL'; conf = 62 + Math.floor(Math.random() * 15); }
-  else if (rsi > 62 && diff > 0) { type = 'BUY'; conf = 62 + Math.floor(Math.random() * 15); }
-  else if (diff < -1.5) { type = 'SELL'; conf = 58 + Math.floor(Math.random() * 12); }
-  else if (diff > 1.5)  { type = 'BUY';  conf = 58 + Math.floor(Math.random() * 12); }
-  else { type = 'NEUTRAL'; conf = 50; }
-
-  const isBuy = type === 'BUY';
-  const tp = isBuy ? price + 38 : price - 38;
-  const sl = isBuy ? price - 22 : price + 22;
-
-  return {
-    type, conf,
-    price: price.toFixed(2),
-    entry: `${(price - 3).toFixed(2)} – ${(price + 3).toFixed(2)}`,
-    tp: tp.toFixed(2),
-    sl: sl.toFixed(2),
-    rsi: rsi.toFixed(1),
-    macd: macd.toFixed(2),
-    rr: '1 : 1.8',
-  };
+async function getNarx() {
+    try {
+        const res = await axios.get(
+            `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${TWELVE_KEY}`
+        );
+        return parseFloat(res.data.price).toFixed(2);
+    } catch {
+        return '—';
+    }
 }
 
-// ── SIGNAL XABAR ─────────────────────────────────────────
-function buildSignalMsg(sig, session) {
-  const emoji  = sig.type === 'BUY' ? '🟢' : sig.type === 'SELL' ? '🔴' : '🟡';
-  const sesTxt = session === 'morning' ? '🌅 ERTALABKI SIGNAL' : '🌆 KECHKI SIGNAL';
+function formatSignal(type, narx, vaqt) {
+    const signals = {
+        'ORB_BUY_0600':      { emoji: '🟢⚡', title: 'ORB BUY SIGNAL',             desc: '06:00 zona tasdiqlandi — YUQORIGA!',   tip: 'Zona ustida pozitsiya oching' },
+        'ORB_SELL_0600':     { emoji: '🔴⚡', title: 'ORB SELL SIGNAL',            desc: '06:00 zona tasdiqlandi — PASTGA!',     tip: 'Zona ostida pozitsiya oching' },
+        'ORB_BUY_0900':      { emoji: '🟢⚡', title: 'ORB BUY SIGNAL',             desc: '09:00 zona tasdiqlandi — YUQORIGA!',   tip: 'Zona ustida pozitsiya oching' },
+        'ORB_SELL_0900':     { emoji: '🔴⚡', title: 'ORB SELL SIGNAL',            desc: '09:00 zona tasdiqlandi — PASTGA!',     tip: 'Zona ostida pozitsiya oching' },
+        'ORB_BUY_1200':      { emoji: '🟢⚡', title: 'ORB BUY SIGNAL',             desc: '12:00 zona tasdiqlandi — YUQORIGA!',   tip: 'Zona ustida pozitsiya oching' },
+        'ORB_SELL_1200':     { emoji: '🔴⚡', title: 'ORB SELL SIGNAL',            desc: '12:00 zona tasdiqlandi — PASTGA!',     tip: 'Zona ostida pozitsiya oching' },
+        'ORB_BUY_1800':      { emoji: '🟢⚡', title: 'ORB BUY SIGNAL',             desc: '18:00 zona tasdiqlandi — YUQORIGA!',   tip: 'Zona ustida pozitsiya oching' },
+        'ORB_SELL_1800':     { emoji: '🔴⚡', title: 'ORB SELL SIGNAL',            desc: '18:00 zona tasdiqlandi — PASTGA!',     tip: 'Zona ostida pozitsiya oching' },
+        'M5_BUY':            { emoji: '💥🟢', title: 'M5 BUY ENTRY',               desc: 'Zona yuqorisi buzildi — BUY kirish!',  tip: 'M5 shamcha yopilishidan keyin kiring' },
+        'M5_SELL':           { emoji: '💥🔴', title: 'M5 SELL ENTRY',              desc: 'Zona quyi buzildi — SELL kirish!',     tip: 'M5 shamcha yopilishidan keyin kiring' },
+        'W2_BUY':            { emoji: '🌊🟢', title: 'ELLIOTT W2 BUY',             desc: "2-to'lqin pullback — BUY entry!",     tip: 'Fibonacci 38-62% zonasida kirish' },
+        'W2_SELL':           { emoji: '🌊🔴', title: 'ELLIOTT W2 SELL',            desc: "2-to'lqin pullback — SELL entry!",    tip: 'Fibonacci 38-62% zonasida kirish' },
+        'W3_BUY':            { emoji: '🚀🟢', title: 'ELLIOTT W3 BUY',             desc: "3-to'lqin — KUCHLI BUY!",            tip: "Eng kuchli to'lqin!" },
+        'W3_SELL':           { emoji: '🚀🔴', title: 'ELLIOTT W3 SELL',            desc: "3-to'lqin — KUCHLI SELL!",           tip: "Eng kuchli to'lqin!" },
+        'ZONA_BUZILDI_BUY':  { emoji: '⚠️🟢', title: 'ZONA BUZILDI — TESKARI BUY', desc: 'M5 zona pastini yopdi — BUY!',       tip: 'Pozitsiyani almashtiring' },
+        'ZONA_BUZILDI_SELL': { emoji: '⚠️🔴', title: 'ZONA BUZILDI — TESKARI SELL',desc: 'M5 zona yuqorisini yopdi — SELL!',   tip: 'Pozitsiyani almashtiring' },
+    };
 
-  return (
-    `${emoji} <b>XAUUSD · ${sig.type} SIGNAL</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `📊 <b>${sesTxt}</b>\n\n` +
-    `💰 <b>Narx:</b> $${sig.price}\n` +
-    `📥 <b>Kirish zona:</b> $${sig.entry}\n` +
-    `🎯 <b>Take Profit:</b> $${sig.tp}\n` +
-    `🛡 <b>Stop Loss:</b> $${sig.sl}\n` +
-    `⚖️ <b>R:R:</b> ${sig.rr}\n\n` +
-    `📈 <b>Indikatorlar:</b>\n` +
-    `  • RSI: ${sig.rsi} — ${parseFloat(sig.rsi) < 35 ? 'Oversold' : parseFloat(sig.rsi) > 65 ? 'Overbought' : 'Neytral'}\n` +
-    `  • MACD: ${parseFloat(sig.macd) >= 0 ? '+' : ''}${sig.macd} — ${parseFloat(sig.macd) >= 0 ? 'Musbat' : 'Manfiy'}\n` +
-    `  • Ishonch: ${sig.conf}%\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `⚠️ <i>Bu signal investitsiya maslahati EMAS.\n` +
-    `Risk menejmentsiz savdo qilmang!</i>\n\n` +
-    `🏅 @Zenedge_trade · ZEN|EDGE`
-  );
+    const s = signals[type] || { emoji: '📊', title: type, desc: 'Signal keldi', tip: '' };
+
+    return `${s.emoji} <b>ZEN|EDGE — XAUUSD</b>
+━━━━━━━━━━━━━━━━━
+<b>${s.title}</b>
+${s.desc}
+━━━━━━━━━━━━━━━━━
+💰 <b>Narx:</b> $${narx}
+🕐 <b>Vaqt:</b> ${vaqt}
+💡 <i>${s.tip}</i>
+━━━━━━━━━━━━━━━━━
+⚠️ <i>Kafolat emas. Risklarni boshqaring!</i>
+📢 @Zenedge_trade`;
 }
 
-// ── ERTALABKI TAHLIL ──────────────────────────────────────
-function buildMorningMsg(price, sig) {
-  const now = new Date(new Date().getTime() + 5*3600000); // UTC+5
-  const sana = now.toLocaleDateString('uz-Cyrl', { weekday:'long', day:'numeric', month:'long' });
+app.post('/webhook', async (req, res) => {
+    try {
+        const body = req.body;
+        const msg  = (body.signal || body.message || body.text || '').toUpperCase();
+        let signalType = '';
 
-  return (
-    `☀️ <b>ZEN|EDGE — ERTALABKI TAHLIL</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `📅 <b>${sana}</b>\n\n` +
-    `💵 <b>XAUUSD:</b> $${price.toFixed(2)}\n\n` +
-    `📊 <b>Texnik holat:</b>\n` +
-    `  • RSI: ${sig.rsi} — ${parseFloat(sig.rsi) < 45 ? 'Zaif' : parseFloat(sig.rsi) > 55 ? 'Kuchli' : 'Neytral'}\n` +
-    `  • MACD: ${parseFloat(sig.macd) >= 0 ? 'Musbat ✅' : 'Manfiy ❌'}\n` +
-    `  • Trend: ${sig.type === 'BUY' ? 'YUQORI 📈' : sig.type === 'SELL' ? 'PAST 📉' : 'YON ➡️'}\n\n` +
-    `🔑 <b>Asosiy darajalar:</b>\n` +
-    `  • Tayanch: $${(price - 42).toFixed(2)}\n` +
-    `  • Qarshilik: $${(price + 80).toFixed(2)}\n\n` +
-    `💡 <b>Bugungi strategiya:</b>\n` +
-    (sig.type === 'BUY'
-      ? `Tayanch darajada BUY imkoniyati mavjud.`
-      : sig.type === 'SELL'
-      ? `Qarshilik darajasida SELL imkoniyati mavjud.`
-      : `Bozor neytral. Signal kuchayishini kuting.`) + '\n\n' +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `⚠️ <i>Faqat malumot uchun. Investitsiya maslahati emas.</i>\n` +
-    `🏅 @Zenedge_trade`
-  );
-}
+        if      (msg.includes('06:00 BUY')  || msg.includes('0600 BUY'))  signalType = 'ORB_BUY_0600';
+        else if (msg.includes('06:00 SELL') || msg.includes('0600 SELL')) signalType = 'ORB_SELL_0600';
+        else if (msg.includes('09:00 BUY')  || msg.includes('0900 BUY'))  signalType = 'ORB_BUY_0900';
+        else if (msg.includes('09:00 SELL') || msg.includes('0900 SELL')) signalType = 'ORB_SELL_0900';
+        else if (msg.includes('12:00 BUY')  || msg.includes('1200 BUY'))  signalType = 'ORB_BUY_1200';
+        else if (msg.includes('12:00 SELL') || msg.includes('1200 SELL')) signalType = 'ORB_SELL_1200';
+        else if (msg.includes('18:00 BUY')  || msg.includes('1800 BUY'))  signalType = 'ORB_BUY_1800';
+        else if (msg.includes('18:00 SELL') || msg.includes('1800 SELL')) signalType = 'ORB_SELL_1800';
+        else if (msg.includes('M5 BUY'))                                   signalType = 'M5_BUY';
+        else if (msg.includes('M5 SELL'))                                  signalType = 'M5_SELL';
+        else if (msg.includes('W2 BUY')  || msg.includes('W2BUY'))        signalType = 'W2_BUY';
+        else if (msg.includes('W2 SELL') || msg.includes('W2SELL'))       signalType = 'W2_SELL';
+        else if (msg.includes('W3 BUY')  || msg.includes('W3BUY'))        signalType = 'W3_BUY';
+        else if (msg.includes('W3 SELL') || msg.includes('W3SELL'))       signalType = 'W3_SELL';
+        else if (msg.includes('BUZILDI') && msg.includes('BUY'))          signalType = 'ZONA_BUZILDI_BUY';
+        else if (msg.includes('BUZILDI') && msg.includes('SELL'))         signalType = 'ZONA_BUZILDI_SELL';
+        else signalType = msg.slice(0, 30) || 'SIGNAL';
 
-// ── TP/SL NATIJA XABARI ───────────────────────────────────
-function buildResultMsg(sig, result) {
-  const emoji = result === 'TP' ? '🎉' : '❌';
-  return (
-    `${emoji} <b>XAUUSD · ${sig.type} — ${result} ${result === 'TP' ? 'URDI ✅' : 'URDI ⛔'}</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `📌 Signal: ${sig.type}\n` +
-    `💰 Kirish: $${sig.price}\n` +
-    `${result === 'TP' ? `🎯 TP: $${sig.tp} ✅` : `🛡 SL: $${sig.sl} ⛔`}\n` +
-    `📊 Natija: ${result === 'TP' ? `+38 pips / +$380` : `-22 pips / -$220`}\n\n` +
-    `${result === 'TP' ? '💪 Tabriklaymiz! Keyingisida ham muvaffaqiyat!' : '📚 Bu ham treyding. Keyingisida omad!'}\n\n` +
-    `⚠️ <i>Otgan natijalar kelajakni kafolatlamaydi.</i>\n` +
-    `🏅 @Zenedge_trade`
-  );
-}
-
-// ── KANALGA YUBORISH ──────────────────────────────────────
-async function sendToChannel(text) {
-  try {
-    await bot.sendMessage(CHANNEL, text, { parse_mode: 'HTML' });
-    console.log(`[${new Date().toLocaleTimeString()}] Kanal ga yuborildi`);
-  } catch (e) {
-    console.error('Kanal xato:', e.message);
-  }
-}
-
-// ── CRON — Avtomatik signallar ────────────────────────────
-// Har kuni 09:00 Toshkent (= 04:00 UTC)
-cron.schedule('0 4 * * 1-5', async () => {
-  console.log('Ertalabki signal yuborilmoqda...');
-  const price = await getPrice();
-  const sig   = calcSignal(price, lastPrice - 2);
-  await sendToChannel(buildMorningMsg(price, sig));
-  await new Promise(r => setTimeout(r, 2000));
-  await sendToChannel(buildSignalMsg(sig, 'morning'));
-}, { timezone: 'UTC' });
-
-// Har kuni 18:00 Toshkent (= 13:00 UTC)
-cron.schedule('0 13 * * 1-5', async () => {
-  console.log('Kechki signal yuborilmoqda...');
-  const price = await getPrice();
-  const sig   = calcSignal(price, lastPrice + 1.5);
-  await sendToChannel(buildSignalMsg(sig, 'evening'));
-}, { timezone: 'UTC' });
-
-// ── BOT BUYRUQLARI ────────────────────────────────────────
-// /start
-bot.onText(/\/start/, async (msg) => {
-  const name = msg.from.first_name || 'Treyder';
-  const text =
-    `🏅 <b>Salom, ${name}!</b>\n\n` +
-    `ZEN|EDGE XAUUSD signal botiga xush kelibsiz!\n\n` +
-    `📢 Rasmiy kanal: @Zenedge_trade\n\n` +
-    `<b>Buyruqlar:</b>\n` +
-    `/signal — Joriy signal\n` +
-    `/tahlil — Texnik tahlil\n` +
-    `/narx — XAUUSD joriy narxi\n` +
-    `/yordam — Barcha buyruqlar\n\n` +
-    `⚠️ <i>Signallar investitsiya maslahati emas!</i>`;
-  await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
+        const narx  = await getNarx();
+        const vaqt  = toshkentVaqt();
+        const xabar = formatSignal(signalType, narx, vaqt);
+        await bot.sendMessage(CHANNEL_ID, xabar, { parse_mode: 'HTML' });
+        res.json({ ok: true, signal: signalType, narx });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
-// /signal
-bot.onText(/\/signal/, async (msg) => {
-  const price = await getPrice();
-  const prev  = lastPrice;
-  const sig   = calcSignal(price, prev);
-  const text  = buildSignalMsg(sig, 'manual');
-  await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
+app.get('/test', async (req, res) => {
+    const narx  = await getNarx();
+    const vaqt  = toshkentVaqt();
+    const type  = req.query.type || 'M5_BUY';
+    const xabar = formatSignal(type, narx, vaqt);
+    await bot.sendMessage(CHANNEL_ID, xabar, { parse_mode: 'HTML' });
+    res.json({ ok: true, narx, vaqt, type });
 });
 
-// /tahlil
-bot.onText(/\/tahlil/, async (msg) => {
-  const price = await getPrice();
-  const sig   = calcSignal(price, lastPrice);
-  const text  =
-    `📊 <b>XAUUSD Texnik Tahlil</b>\n\n` +
-    `💰 Narx: <b>$${price.toFixed(2)}</b>\n` +
-    `📈 RSI (14): ${sig.rsi} — ${parseFloat(sig.rsi) < 35 ? 'Oversold (BUY imkoniyati)' : parseFloat(sig.rsi) > 65 ? 'Overbought (SELL imkoniyati)' : 'Neytral'}\n` +
-    `📉 MACD: ${parseFloat(sig.macd) >= 0 ? '+' : ''}${sig.macd} — ${parseFloat(sig.macd) >= 0 ? 'Bullish' : 'Bearish'}\n` +
-    `💪 Trend: ${sig.type === 'BUY' ? 'YUQORI 📈' : sig.type === 'SELL' ? 'PAST 📉' : 'NEYTRAL ➡️'}\n\n` +
-    `🔑 Darajalar:\n` +
-    `  • Tayanch: $${(price - 42).toFixed(2)}\n` +
-    `  • Qarshilik: $${(price + 80).toFixed(2)}\n\n` +
-    `⚠️ <i>Investitsiya maslahati emas. @Zenedge_trade</i>`;
-  await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
+app.get('/', (req, res) => {
+    res.json({ status: 'ZEN|EDGE Bot ishlayapti', vaqt: toshkentVaqt() });
 });
 
-// /narx
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id,
+        '🏆 <b>ZEN|EDGE Bot</b>\n\nXAUUSD signal boti\n\n/signal — Holat\n/narx — Joriy narx\n/yordam — Qollanma',
+        { parse_mode: 'HTML' }
+    );
+});
+
 bot.onText(/\/narx/, async (msg) => {
-  const price = await getPrice();
-  const text  =
-    `💰 <b>XAUUSD Joriy Narx</b>\n\n` +
-    `Narx: <b>$${price.toFixed(2)}</b>\n` +
-    `BID: $${(price - 0.18).toFixed(2)}\n` +
-    `ASK: $${(price + 0.17).toFixed(2)}\n` +
-    `Spread: 0.35 pip\n\n` +
-    `🏅 @Zenedge_trade`;
-  await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
+    const narx = await getNarx();
+    bot.sendMessage(msg.chat.id,
+        `💰 <b>XAUUSD</b>\n\n$${narx}\n🕐 ${toshkentVaqt()}`,
+        { parse_mode: 'HTML' }
+    );
 });
 
-// /yordam
-bot.onText(/\/yordam/, async (msg) => {
-  const text =
-    `🏅 <b>ZEN|EDGE Bot Buyruqlari</b>\n\n` +
-    `/signal — Joriy BUY/SELL signali\n` +
-    `/tahlil — RSI, MACD, trend tahlili\n` +
-    `/narx — XAUUSD joriy narxi\n` +
-    `/start — Boshlash\n` +
-    `/yordam — Ushbu yordam\n\n` +
-    `📢 Kanal: @Zenedge_trade\n` +
-    `⏰ Kunlik signal: 09:00 va 18:00\n\n` +
-    `⚠️ <i>Barcha signal va tahlillar investitsiya maslahati emas.</i>`;
-  await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
+bot.onText(/\/signal/, async (msg) => {
+    const narx = await getNarx();
+    bot.sendMessage(msg.chat.id,
+        `📊 <b>ZEN|EDGE</b>\n\n💰 XAUUSD: $${narx}\n🕐 ${toshkentVaqt()}\n\n✅ Signal kutmoqda...`,
+        { parse_mode: 'HTML' }
+    );
 });
 
-// Polling xato
-bot.on('polling_error', (e) => {
-  console.error('Polling xato:', e.message);
+bot.onText(/\/yordam/, (msg) => {
+    bot.sendMessage(msg.chat.id,
+        `📚 <b>ZEN|EDGE Qollanma</b>\n\n🟢⚡ ORB Signal\n💥 M5 Entry\n🌊 W2/W3 Elliott\n⚠️ Zona Buzildi\n\n📢 @Zenedge_trade`,
+        { parse_mode: 'HTML' }
+    );
 });
 
-console.log('Bot tayyor! Buyruqlar: /start /signal /tahlil /narx /yordam');
-console.log('Kanal signallari: 09:00 va 18:00 (Toshkent)');
+app.listen(PORT, () => {
+    console.log(`ZEN|EDGE Bot — Port: ${PORT}`);
+});
